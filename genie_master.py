@@ -8,6 +8,7 @@ from langchain.document_loaders import DataFrameLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 
 import chromadb
+from chromadb.config import Settings
 from datetime import datetime
 from pytz import timezone
 class GenieMaster:
@@ -22,7 +23,7 @@ class GenieMaster:
 
         # init chromadb vector storage
         # https://docs.trychroma.com/usage-guide
-        client = chromadb.PersistentClient(path=db_path)
+        client = chromadb.PersistentClient(path=db_path, settings = Settings(anonymized_telemetry=False))
         self.vectorstore = Chroma(
             client=client,
             collection_name=collection_name,

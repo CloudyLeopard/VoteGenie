@@ -21,7 +21,8 @@ print(response["result"].get("answer", ""))
 print("\033[1mREASONING:\033[0m")
 print(response["result"].get("reasoning", ""))
 print("\033[1mEVIDENCE:\033[0m")
-print(response["result"].get("evidence", ""))
+for evidence in response["result"].get("evidence", []):
+    print("-", evidence)
 print("\033[1mCOST:\033[0m", response["total_cost"])
 print("="*20)
 

@@ -42,7 +42,7 @@ class Genie:
         use_parser = True
     ):
         self.politician_name = politician_name
-        self.model_name = model_name
+        self.model_name = self.validate_model_name(model_name)
         self.vectorstore = vectorstore
         self.retriever = self._retriever(self.vectorstore, politician_name)
         
@@ -61,6 +61,11 @@ class Genie:
             return_source_documents=True,
             chain_type_kwargs={"prompt": self.prompt},
         )
+    @staticmethod
+    def validate_model_name(name):
+        if name == "gpt-4":
+            return name
+        return "gpt-3.5-turbo"
 
     @staticmethod
     def prompt_generator(name, output_format_instruction: str = ""):

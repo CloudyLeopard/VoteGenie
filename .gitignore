@@ -4,4 +4,4 @@ result/
 
 chroma_qadata_db/
 chroma_qadata_db.zip
-api_calls.log
+api_calls*.log
