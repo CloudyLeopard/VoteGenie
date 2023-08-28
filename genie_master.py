@@ -11,10 +11,12 @@ import chromadb
 from chromadb.config import Settings
 from datetime import datetime
 from pytz import timezone
+
+
 class GenieMaster:
     _EMBEDDING_FUNCTION = OpenAIEmbeddings()
 
-    def __init__(self, db_path="./chroma_db", collection_name = "langchain"):
+    def __init__(self, db_path="./chroma_db", collection_name="langchain"):
         tz = timezone("US/Eastern")
         self.init_time = datetime.now(tz)
         print(f"Genie Master initialized at: {self.init_time}")
@@ -23,19 +25,21 @@ class GenieMaster:
 
         # init chromadb vector storage
         # https://docs.trychroma.com/usage-guide
-        client = chromadb.PersistentClient(path=db_path, settings = Settings(anonymized_telemetry=False))
+        client = chromadb.PersistentClient(
+            path=db_path, settings=Settings(anonymized_telemetry=False)
+        )
         self.vectorstore = Chroma(
             client=client,
             collection_name=collection_name,
-            embedding_function=self._EMBEDDING_FUNCTION
+            embedding_function=self._EMBEDDING_FUNCTION,
         )
-    
+
     def _document_count(self):
         return self.get_collection().count()
 
     def model_is_ready(self):
         return self._document_count() > 0
-        
+
     def get_collection(self):
         return self.vectorstore._collection
 
@@ -97,6 +101,18 @@ class GenieMaster:
             model_name=model_name,
             use_parser=use_parser,
         )
+
+    def get_genies(
+        self, names: list[str], model_name: str = "gpt-3.5-turbo", use_parser=True
+    ) -> dict[str, Genie]:
+        genies = {
+            name: self.get_genie(
+                name=name, model_name=model_name, use_parser=use_parser
+            )
+            for name in names
+        }
+        return genies
+
 
 if __name__ == "__main__":
     import re

@@ -162,7 +162,7 @@ Question: For {name}, {question}
                 self.politician_name,
                 self.model_name,
                 datetime.now(tz),
-                json.dumps(result, indent=4),
+                json.dumps(result),
             )
         return result
 
@@ -189,7 +189,7 @@ Question: For {name}, {question}
                 self.politician_name,
                 self.model_name,
                 datetime.now(tz),
-                json.dumps(result, indent=4),
+                json.dumps(result),
             )
         return result
     
