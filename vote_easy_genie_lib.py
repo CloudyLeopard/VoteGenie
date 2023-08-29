@@ -176,22 +176,25 @@ def get_df_remaining_prompts(df_original, df_finished):
     return result_df
 
 async def get_df_results(df_prompts: pd.DataFrame, vectorstore_path: str,
-                         output_csv: str, output_xlsx: str, model_name="gpt-3.5-turbo"):
+                         output_csv: str, output_xlsx: str, model_name="gpt-3.5-turbo",
+                         verbose=True):
     # CHECK COLUMNS
     if not check_columns(df_prompts, INPUT_DF_COLUMNS):
         return
+    
+    if verbose:
+        # prompt user to make sure they want to continue
+        estimated_tokens = df_prompts.shape[0] * AVG_TOKENS_PER_REQUEST
+        
+        print("Number of rows to be processed:", df_prompts.shape[0])
 
-    print("Number of rows to be processed:", df_prompts.shape[0])
+        print("Estimated cost: $"+ str(estimate_cost(model_name, estimated_tokens)))
+        if not input("Continue (y/n)? ") == 'y' :
+            return
 
-    # prompt user to make sure they want to continue
-    estimated_tokens = df_prompts.shape[0] * AVG_TOKENS_PER_REQUEST
-    print("Estimated cost: $"+ str(estimate_cost(model_name, estimated_tokens)))
-    if not input("Continue (y/n)? ") == 'y' :
-        return
-
-    # ERASE OUTPUT FILE IF CALLED FOR
-    if input(f"Clear output file ({output_csv}) content (y/n)? ") == 'y':
-        open(output_csv, 'w').close()
+        # ERASE OUTPUT FILE IF CALLED FOR
+        if input(f"Clear output file ({output_csv}) content (y/n)? ") == 'y':
+            open(output_csv, 'w').close()
 
     # PROCESS DATAFRAME
     df_new = await process_df(df_prompts, vectorstore_path, output_file=output_csv, model_name=model_name)

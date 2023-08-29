@@ -1,6 +1,8 @@
 __pycache__/
 data/
 result/
+uploads/
+temp/
 
 chroma_qadata_db/
 chroma_qadata_db.zip

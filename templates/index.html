@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Excel Upload Web App</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+</head>
+<body>
+    <div class="container mt-5">
+        <h1>Excel Upload Web App</h1>
+        <form method="POST" action="/upload" enctype="multipart/form-data">
+            <div class="form-group">
+                <input type="file" name="file" accept=".xlsx, .xls" class="form-control-file">
+            </div>
+            <button type="submit" class="btn btn-primary">Upload</button>
+        </form>
+        {% if politician_nums %}
+        <h2>Uploaded Excel Data First 5 Rows</h2>
+        {{ table|safe }}
+
+        <h3>Number of politicians in data:</h3>
+        {{ politician_nums }}
+
+        <h1>List of Questions</h1>
+        <ul>
+            {% for question in questions %}
+                <li>{{ question }}</li>
+            {% endfor %}
+        </ul>
+        
+        <form method="GET" action="/prompts">
+            <button id="continue1" type="submit" class="btn btn-primary">Continue 1</button>
+        </form>
+        {% endif %}
+
+        {% if prompt_nums %}
+        <h2>Generated Prompt First 5 Rows</h2>
+        {{ table|safe }}
+        <h2>
+            Number of requests: 
+            <span id="request_num">{{ prompt_nums }}</span>
+        </h2>
+        <h2>
+            Estimated cost:
+            <span id="estimated_cost">{{ estimated_cost }}</span>
+        </h2>
+
+        <form method="GET" action="/process">
+            <button id="continue2" type="submit" class="btn btn-primary">Continue 2</button>
+        </form>
+        <p id="continue2_progress"></p>
+        {% endif %}
+
+        {% if total_cost %}
+        <h2>
+            Total cost:
+            <span>{{ total_cost }}</span>
+        </h2>
+
+        <h2>Generated Result</h2>
+        {{ table|safe }}
+        
+        {% endif %}
+    </div>
+</body>
+<script>
+    document.querySelector("#id").addEventListener('click', () => {
+        document.querySelector("#continue2_progress").textContent = "in progress!"
+    });
+</script>
+</html>
