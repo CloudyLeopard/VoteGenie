@@ -3,10 +3,13 @@ import os
 from werkzeug.utils import secure_filename
 import pandas as pd
 from vote_easy_genie_lib import *
+import asyncio
+from datetime import datetime
 
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = 'uploads'
+app.config['SECRET_KEY'] = os.urandom(12)
 ALLOWED_EXTENSIONS = {'xlsx', 'xls'}
 AVG_TOKENS_PER_REQUEST = 800
 
@@ -50,7 +53,7 @@ def upload_file():
 
 
         df_people = pd.read_excel(uploaded_file)
-        session["df_people"] = df_people
+        session["df_people_serialized"] = df_people.to_json(orient="records")
         row_nums = df_people.shape[0]
         table_html = df_people.iloc[:5].to_html(classes='table table-striped', index=False)
         # Process the uploaded file (you can add your processing logic here)
@@ -59,11 +62,11 @@ def upload_file():
 
 @app.route('/prompts', methods=['GET'])
 def prompts():
-    if not "df_people" in session:
+    if not "df_people_serialized" in session:
           return redirect(url_for('index'))
-    df_people = session["df_people"]
+    df_people = pd.read_json(session.pop("df_people_serialized"), orient="record")
     df_prompts = get_df_prompts(df_people, questions)
-    session["df_prompts"] = df_prompts
+    session["df_prompts_serialized"] = df_prompts.to_json(orient="records")
     row_nums = df_prompts.shape[0]
     # prompt user to make sure they want to continue
     estimated_tokens = row_nums * AVG_TOKENS_PER_REQUEST
@@ -73,19 +76,23 @@ def prompts():
     return render_template('index.html', prompt_nums=row_nums, estimated_cost=estimated_cost, table=table_html)
 
 @app.route('/process', methods=['GET'])
-async def process():
-    if not "df_prompts" in session:
+def process():
+    if not "df_prompts_serialized" in session:
         return redirect(url_for('index'))
-    df_prompts = session["df_prompts"]
+    df_prompts = pd.read_json(session.pop("df_prompts_serialized"), orient="record")
 
+    filename = request.args.get('filename', type=str)
+    current_date = datetime.now()
+    formatted_date = current_date.strftime("%m-%d-%y")
+
+    output_xlsx = "./result/" + filename + "-" + formatted_date + ".xlsx"
     output_csv = "./temp/temp.csv"
-    output_xlsx = "./temp/temp.xlsx"
-    df_results = await get_df_results(df_prompts, vectorstore_path, output_csv, output_xlsx, model_name, verbose=False)
-    session["df_results"] = df_results
+    df_results = asyncio.run(get_df_results(df_prompts, vectorstore_path, output_csv, output_xlsx, model_name, verbose=False))
+    session["df_results_serialized"] = df_results[['name', 'party', 'usertitle', 'question', 'answer', 'reasoning', 'evidence']].to_json(orient="records")
 
     total_cost = df_results['cost'].sum()
     table_html = df_results.to_html(classes='table table-striped', index=False)
     return render_template('index.html', total_cost=total_cost, table=table_html)
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run()

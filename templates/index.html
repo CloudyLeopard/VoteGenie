@@ -28,7 +28,7 @@
         </ul>
         
         <form method="GET" action="/prompts">
-            <button id="continue1" type="submit" class="btn btn-primary">Continue 1</button>
+            <button id="continue1" type="submit" class="btn btn-primary">Get estimates before processing</button>
         </form>
         {% endif %}
 
@@ -45,7 +45,9 @@
         </h2>
 
         <form method="GET" action="/process">
-            <button id="continue2" type="submit" class="btn btn-primary">Continue 2</button>
+            <label for="filename">Enter file name to store data. ONLY THE NAME, so do not add "./xlsx" or "./"</label>
+            <input type="text" name="filename">
+            <button id="continue2" type="submit" class="btn btn-primary">Begin processing</button>
         </form>
         <p id="continue2_progress"></p>
         {% endif %}
