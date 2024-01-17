@@ -2,9 +2,9 @@ from genie import Genie
 import uuid
 import pandas as pd
 
-from langchain.embeddings import OpenAIEmbeddings
-from langchain.vectorstores import Chroma
-from langchain.document_loaders import DataFrameLoader
+from langchain_openai.embeddings import OpenAIEmbeddings
+from langchain_community.vectorstores import Chroma
+from langchain_community.document_loaders import DataFrameLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 
 import chromadb
@@ -89,7 +89,7 @@ class GenieMaster:
     def get_genie(
         self,
         name: str,
-        model_name: str = "gpt-3.5-turbo",
+        model_name: str = "gpt-4-1106-preview",
         use_parser=True,
     ) -> Genie:
         if not self.model_is_ready():

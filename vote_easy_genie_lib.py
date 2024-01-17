@@ -15,11 +15,11 @@ US_STATES = [
     "Virginia", "Washington", "West Virginia", "Wisconsin", "Wyoming"
 ]
 
-INPUT_DF_COLUMNS = ["name", "party", "usertitle"]
+INPUT_DF_COLUMNS = ["name", "question"]
 COLUMN_NAMES = ["name", "party", "usertitle", "question", "answer", "reasoning",
                 "evidence", "source_content", "source_category", "source_sub_category", "cost"]
 
-AVG_TOKENS_PER_REQUEST = 800
+AVG_TOKENS_PER_REQUEST = 800.0
 
 async def process_row(session, genie, row, output_path, container):
     # ask genie with the question and get a result
@@ -76,6 +76,7 @@ async def process_df(df_prompts: pd.DataFrame, vectorstore_path: str, output_fil
     # CALCULATE BATCH_SIZE
     BATCH_SIZE_PERCENTAGE = 0.9
     batch_size = round(rpm * BATCH_SIZE_PERCENTAGE)
+    SECONDS_PER_BATCH = 60
 
     # SET UP COST BENCHMARKING
     # this tracks if the cost has reached a certain point
@@ -89,9 +90,16 @@ async def process_df(df_prompts: pd.DataFrame, vectorstore_path: str, output_fil
 
     # process the dataframe by using the name and question, asking llm, get result, store in new dataframe, and return it
     num_rows = df_prompts.shape[0]
+
+    estimated_time = num_rows / batch_size * SECONDS_PER_BATCH
+    print("Estimated time (in seconds):", estimated_time)
+    
+    print(estimated_time)
     for batch_start in tqdm(range(0, num_rows, batch_size), desc=f"Processing batches ({batch_size} rows per batch)"):
         batch_end = min(batch_start + batch_size, num_rows)
         df_batch = df_prompts.iloc[batch_start:batch_end]
+
+        start_time = time.time()
 
         processed_rows = await process_rows(df_batch, genies, output_file)
         processed_rows_list.append(processed_rows)
@@ -101,9 +109,11 @@ async def process_df(df_prompts: pd.DataFrame, vectorstore_path: str, output_fil
             print(f"Cost exceeded {cost_benchmarks[curr_bm]}: {round(curr_cost, 4)}")
             curr_bm += 1
         
+        elapsed_time = time.time() - start_time
+        sleep_time = SECONDS_PER_BATCH - elapsed_time
         # if its not the end, rest for 60 sec to prevent reaching rate limit
-        if batch_end < num_rows:
-            time.sleep(60)
+        if sleep_time > 0:
+            time.sleep(sleep_time)
     df_new = pd.concat(processed_rows_list)
 
     print("Total cost:", df_new['cost'].sum())

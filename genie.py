@@ -2,7 +2,7 @@ import os
 
 os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY")
 
-from langchain.vectorstores.base import VectorStore
+from langchain_core.vectorstores import VectorStore
 from langchain.prompts import (
     ChatPromptTemplate,
     PromptTemplate,
@@ -10,30 +10,35 @@ from langchain.prompts import (
     HumanMessagePromptTemplate,
 )
 from langchain.output_parsers import PydanticOutputParser
+from langchain_core.output_parsers import JsonOutputParser
 from pydantic import BaseModel, Field
 from typing import List
-from langchain.chains import RetrievalQA
-from langchain.chat_models import ChatOpenAI
-from langchain.embeddings import OpenAIEmbeddings
-from langchain.callbacks import get_openai_callback
+# from langchain.chains import RetrievalQA
+from langchain_openai.chat_models import ChatOpenAI
+from langchain_community.embeddings import OpenAIEmbeddings
+from langchain_community.callbacks import get_openai_callback
 
 # retrievers
 from langchain.retrievers.multi_query import MultiQueryRetriever
 from langchain.retrievers import ContextualCompressionRetriever
 from langchain.retrievers.document_compressors import EmbeddingsFilter
-from langchain.document_transformers import EmbeddingsRedundantFilter
+from langchain_community.document_transformers import EmbeddingsRedundantFilter
 from langchain.retrievers.document_compressors import DocumentCompressorPipeline
 from langchain.text_splitter import CharacterTextSplitter
+from langchain_core.runnables import RunnablePassthrough
+from langchain_core.runnables import RunnableParallel
+
 
 import logging
+import uuid
 
-logging.basicConfig(filename="./api_calls.log", level=logging.INFO)
 import json
 from datetime import datetime
 from pytz import timezone
 
 
 class Genie:
+
     def __init__(
         self,
         politician_name: str,
@@ -48,24 +53,54 @@ class Genie:
         
         self.output_parser = None
         if use_parser:
-            self.output_parser = PydanticOutputParser(pydantic_object=self.ResponseWithReasoningAndEvidence)
+            self.output_parser = JsonOutputParser(pydantic_object=self.ResponseWithReasoningAndEvidence)
             format_instruction = self.output_parser.get_format_instructions()
         else:
             format_instruction = ""
         self.prompt = self.prompt_generator(politician_name, format_instruction)
 
-        self.genie = RetrievalQA.from_chain_type(
-            ChatOpenAI(model_name=model_name, temperature=0),
-            chain_type="stuff",
-            retriever=self.retriever,
-            return_source_documents=True,
-            chain_type_kwargs={"prompt": self.prompt},
+
+        # the magic starts here
+        def format_docs(docs):
+            return "\n\n".join(doc.page_content for doc in docs)
+
+        llm = ChatOpenAI(model_name=model_name, temperature=0)
+        llm = lambda x: json.dumps({"fake": "llm"})
+        rag_chain_from_docs = (
+            RunnablePassthrough.assign(context=(lambda x: format_docs(x["source_documents"])))
+            | self.prompt
+            | llm
+            | self.output_parser
         )
+
+        # chain to return context
+        self.rag_chain = RunnableParallel(
+            {"source_documents": self.retriever, "question": RunnablePassthrough()}
+        ).assign(result=rag_chain_from_docs)
+        # Note: figure how out runnable works and add a chain to parse source_documents here
+        
+        # logic: rag_chain.invoke(xxx)
+        # --> xxx gets passed into self.retriever and RunnablePassthrough()
+        # returns {"context": retriever(xxx), "question": xxx}
+        # --> this is input into rag_chain_from_docs, and the output of that is appended
+        # to the dict under the key "result"
+
+        self.logger = logging.getLogger('genie')
+        self.logger.setLevel(logging.INFO)
+        handler = logging.FileHandler('./api_calls.log')
+        self.logger.addHandler(handler)
+        self.logger.propagate = False
+
     @staticmethod
     def validate_model_name(name):
-        if name == "gpt-4":
+        if name == "gpt-4" or name == "gpt-4-1106-preview":
             return name
-        return "gpt-3.5-turbo"
+        return "gpt-3.5-turbo-1106"
+
+    @staticmethod
+    def generate_random_id():
+        random_uuid = uuid.uuid4()
+        return str(random_uuid)[:8]
 
     @staticmethod
     def prompt_generator(name, output_format_instruction: str = ""):
@@ -135,57 +170,55 @@ Question: For {name}, {question}
             base_compressor=pipeline_compressor, base_retriever=base_retriever
         )
         return compression_retriever
+    
+    def _parse_context(source_docs: dict):
+        for i in range(len(source_docs)):
+            source_docs[i] = {
+                "source_content": source_docs[i].page_content,
+                "source_category": source_docs[i].metadata.get(
+                    "parent_question", ""
+                ),
+                "source_sub_category": source_docs[i].metadata.get("question", ""),
+            }
+        return source_docs
 
     def get_relevant_documents(self, question: str):
         return self.retriever.get_relevant_documents(question)
 
     def ask(self, question: str):
         with get_openai_callback() as cb:
-            result = self.genie({"query": question})
-            # parse result into desired format (e.g. dict) if a parser is passed in
-            if self.output_parser:
-                result["result"] = self.output_parser.parse(result["result"]).dict()
-            source_docs = result["source_documents"]
-            for i in range(len(source_docs)):
-                source_docs[i] = {
-                    "source_content": source_docs[i].page_content,
-                    "source_category": source_docs[i].metadata.get(
-                        "parent_question", ""
-                    ),
-                    "source_sub_category": source_docs[i].metadata.get("question", ""),
-                }
+            result = self.rag_chain.invoke(question)
+
             result["total_tokens"] = cb.total_tokens
             result["total_cost"] = cb.total_cost
+            result["source_documents"] = self._parse_context(result["source_documents"])
+
+            # logging
+            # Note: move log into the chain later
             tz = timezone("US/Eastern")
-            logging.info(
-                "Genie Response:name=%s model=%s time=%s response=%s",
+            self.logger.info(
+                "Genie Response:id=%s name=%s model=%s time=%s response=%s",
+                id,
                 self.politician_name,
                 self.model_name,
                 datetime.now(tz),
                 json.dumps(result),
             )
         return result
+    
+    def batch_ask(self, questions: List[str]):
+        return
 
     async def async_ask(self, question: str):
         with get_openai_callback() as cb:
             result = await self.genie.acall({"query": question})
-            # parse result into desired format (e.g. dict) if a parser is passed in
-            if self.output_parser:
-                result["result"] = self.output_parser.parse(result["result"]).dict()
-            source_docs = result["source_documents"]
-            for i in range(len(source_docs)):
-                source_docs[i] = {
-                    "source_content": source_docs[i].page_content,
-                    "source_category": source_docs[i].metadata.get(
-                        "parent_question", ""
-                    ),
-                    "source_sub_category": source_docs[i].metadata.get("question", ""),
-                }
-            result["total_tokens"] = cb.total_tokens
-            result["total_cost"] = cb.total_cost
+            result = self._parse_result(result, cb.total_tokens, cb.total_cost)
+
+            # logging
             tz = timezone("US/Eastern")
-            logging.info(
-                "Async Genie Response:name=%s model=%s time=%s response=%s",
+            self.logger.info(
+                "Async Genie Response:id=%s name=%s model=%s time=%s response=%s",
+                id,
                 self.politician_name,
                 self.model_name,
                 datetime.now(tz),
