@@ -13,7 +13,7 @@ if question == "":
 genie = gm.get_genie(name)
 
 # test prompt
-print(genie.prompt.format(context="CONTEXT", question="QUESTION"))
+# print(genie.prompt.format(context="CONTEXT", question="QUESTION"))
 # exit()
 
 response = genie.ask(question)

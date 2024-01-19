@@ -1,5 +1,4 @@
 import os
-
 os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY")
 
 from langchain_core.vectorstores import VectorStore
@@ -9,7 +8,6 @@ from langchain.prompts import (
     SystemMessagePromptTemplate,
     HumanMessagePromptTemplate,
 )
-from langchain.output_parsers import PydanticOutputParser
 from langchain_core.output_parsers import JsonOutputParser
 from pydantic import BaseModel, Field
 from typing import List
@@ -25,8 +23,10 @@ from langchain.retrievers.document_compressors import EmbeddingsFilter
 from langchain_community.document_transformers import EmbeddingsRedundantFilter
 from langchain.retrievers.document_compressors import DocumentCompressorPipeline
 from langchain.text_splitter import CharacterTextSplitter
-from langchain_core.runnables import RunnablePassthrough
-from langchain_core.runnables import RunnableParallel
+from langchain_core.runnables import RunnablePassthrough, RunnableParallel, RunnableLambda
+
+# type declaration
+from langchain_core.documents.base import Document
 
 
 import logging
@@ -57,32 +57,48 @@ class Genie:
             format_instruction = self.output_parser.get_format_instructions()
         else:
             format_instruction = ""
-        self.prompt = self.prompt_generator(politician_name, format_instruction)
+        prompt = self.prompt_generator(politician_name, format_instruction)
 
 
         # the magic starts here
         def format_docs(docs):
             return "\n\n".join(doc.page_content for doc in docs)
+        
+        def print_prompt(prompt):
+            print(prompt.to_messages())
+            return prompt
 
         llm = ChatOpenAI(model_name=model_name, temperature=0)
-        llm = lambda x: json.dumps({"fake": "llm"})
-        rag_chain_from_docs = (
-            RunnablePassthrough.assign(context=(lambda x: format_docs(x["source_documents"])))
-            | self.prompt
+        # llm = RunnableLambda(lambda x: json.dumps({"fake": "llm"})) # for testing
+
+        llm_generate = (
+            RunnablePassthrough.assign(context=(lambda x: format_docs(x["context"])))
+            | prompt
+            | RunnableLambda(print_prompt)
             | llm
             | self.output_parser
         )
 
-        # chain to return context
-        self.rag_chain = RunnableParallel(
-            {"source_documents": self.retriever, "question": RunnablePassthrough()}
-        ).assign(result=rag_chain_from_docs)
+        self.rag_chain = (
+            RunnableParallel(
+                {"context": self.retriever, "question": RunnablePassthrough()})
+            | RunnablePassthrough.assign(
+                result=llm_generate)
+            | RunnablePassthrough.assign(
+                source_documents=(lambda x: self._parse_documents(x["context"])))
+            | RunnableLambda(lambda output: [output.pop('context'), output] [1]) # drop the key "context"
+        )        
+        
         # Note: figure how out runnable works and add a chain to parse source_documents here
         
         # logic: rag_chain.invoke(xxx)
         # --> xxx gets passed into self.retriever and RunnablePassthrough()
-        # returns {"context": retriever(xxx), "question": xxx}
+        # returns {"source_documents": retriever(xxx), "question": xxx}
         # --> this is input into rag_chain_from_docs, and the output of that is appended
+        # the RunnablePassthrough creates a {"context"=format_docs(retriever(xxx)),
+        #   "source_documents":"retriver(xxx)", "question'":xxx}
+        # passthrough to prompt, a chat prompt template that needs "context" and "question" as variables
+        #   returns the entire prompt which is passed into llm, etc.
         # to the dict under the key "result"
 
         self.logger = logging.getLogger('genie')
@@ -171,7 +187,8 @@ Question: For {name}, {question}
         )
         return compression_retriever
     
-    def _parse_context(source_docs: dict):
+    @staticmethod
+    def _parse_documents(source_docs: List[Document]):
         for i in range(len(source_docs)):
             source_docs[i] = {
                 "source_content": source_docs[i].page_content,
@@ -180,6 +197,7 @@ Question: For {name}, {question}
                 ),
                 "source_sub_category": source_docs[i].metadata.get("question", ""),
             }
+            # source_docs[i] = source_docs[i].dict() # langchain has a method to parse document to dict
         return source_docs
 
     def get_relevant_documents(self, question: str):
@@ -188,10 +206,11 @@ Question: For {name}, {question}
     def ask(self, question: str):
         with get_openai_callback() as cb:
             result = self.rag_chain.invoke(question)
+            print(result)
 
-            result["total_tokens"] = cb.total_tokens
-            result["total_cost"] = cb.total_cost
-            result["source_documents"] = self._parse_context(result["source_documents"])
+            # result["total_tokens"] = cb.total_tokens
+            # result["total_cost"] = cb.total_cost
+            # result["source_documents"] = self._parse_context(result["source_documents"])
 
             # logging
             # Note: move log into the chain later
