@@ -12,6 +12,9 @@ from chromadb.config import Settings
 from datetime import datetime
 from pytz import timezone
 
+# type declaration
+from typing import List
+
 
 class GenieMaster:
     _EMBEDDING_FUNCTION = OpenAIEmbeddings()
@@ -89,7 +92,7 @@ class GenieMaster:
     def get_genie(
         self,
         name: str,
-        model_name: str = "gpt-4-1106-preview",
+        model_name: str = "gpt-3.5-turbo-1106",
         use_parser=True,
     ) -> Genie:
         if not self.model_is_ready():
@@ -103,7 +106,7 @@ class GenieMaster:
         )
 
     def get_genies(
-        self, names: list[str], model_name: str = "gpt-3.5-turbo", use_parser=True
+        self, names: List[str], model_name: str = "gpt-3.5-turbo-1106", use_parser=True
     ) -> dict[str, Genie]:
         genies = {
             name: self.get_genie(
@@ -112,7 +115,6 @@ class GenieMaster:
             for name in names
         }
         return genies
-
 
 if __name__ == "__main__":
     import re

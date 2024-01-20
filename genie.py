@@ -1,4 +1,5 @@
 import os
+
 os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY")
 
 from langchain_core.vectorstores import VectorStore
@@ -8,9 +9,8 @@ from langchain.prompts import (
     SystemMessagePromptTemplate,
     HumanMessagePromptTemplate,
 )
-from langchain_core.output_parsers import JsonOutputParser
-from pydantic import BaseModel, Field
-from typing import List
+from langchain_core.output_parsers import StrOutputParser, JsonOutputParser
+
 # from langchain.chains import RetrievalQA
 from langchain_openai.chat_models import ChatOpenAI
 from langchain_community.embeddings import OpenAIEmbeddings
@@ -19,15 +19,31 @@ from langchain_community.callbacks import get_openai_callback
 # retrievers
 from langchain.retrievers.multi_query import MultiQueryRetriever
 from langchain.retrievers import ContextualCompressionRetriever
-from langchain.retrievers.document_compressors import EmbeddingsFilter
+from langchain.retrievers.document_compressors import (
+    EmbeddingsFilter,
+    DocumentCompressorPipeline,
+)
 from langchain_community.document_transformers import EmbeddingsRedundantFilter
-from langchain.retrievers.document_compressors import DocumentCompressorPipeline
 from langchain.text_splitter import CharacterTextSplitter
-from langchain_core.runnables import RunnablePassthrough, RunnableParallel, RunnableLambda
+from langchain_core.runnables import (
+    RunnablePassthrough,
+    RunnableParallel,
+    RunnableLambda,
+)
+
+from ragas.metrics import (
+    answer_relevancy,
+    faithfulness,
+    context_recall,
+    context_precision,
+    context_relevancy
+)
+from ragas import evaluate
 
 # type declaration
 from langchain_core.documents.base import Document
-
+from pydantic import BaseModel, Field
+from typing import List
 
 import logging
 import uuid
@@ -36,36 +52,41 @@ import json
 from datetime import datetime
 from pytz import timezone
 
+from datasets import Dataset
+
 
 class Genie:
-
     def __init__(
         self,
         politician_name: str,
         vectorstore: VectorStore,
-        model_name: str = "gpt-3.5-turbo",
-        use_parser = True
+        model_name: str = "gpt-3.5-turbo-1106",
+        use_parser=True,
+        debug=False
     ):
         self.politician_name = politician_name
         self.model_name = self.validate_model_name(model_name)
         self.vectorstore = vectorstore
         self.retriever = self._retriever(self.vectorstore, politician_name)
-        
-        self.output_parser = None
-        if use_parser:
-            self.output_parser = JsonOutputParser(pydantic_object=self.ResponseWithReasoningAndEvidence)
-            format_instruction = self.output_parser.get_format_instructions()
-        else:
-            format_instruction = ""
-        prompt = self.prompt_generator(politician_name, format_instruction)
 
+        if use_parser:
+            output_parser = JsonOutputParser(
+                pydantic_object=self.ResponseWithReasoningAndEvidence
+            )
+            format_instruction = output_parser.get_format_instructions()
+        else:
+            output_parser = StrOutputParser()
+            format_instruction = ""
+
+        prompt = self.prompt_generator(politician_name, format_instruction)
 
         # the magic starts here
         def format_docs(docs):
             return "\n\n".join(doc.page_content for doc in docs)
-        
+
         def print_prompt(prompt):
-            print(prompt.to_messages())
+            if debug:
+                print(prompt.to_messages())
             return prompt
 
         llm = ChatOpenAI(model_name=model_name, temperature=0)
@@ -76,36 +97,45 @@ class Genie:
             | prompt
             | RunnableLambda(print_prompt)
             | llm
-            | self.output_parser
+            | output_parser
         )
 
+        self.rag_chain_base = RunnableParallel(
+            {"context": self.retriever, "question": RunnablePassthrough()}
+        ).assign(result=llm_generate)
+
         self.rag_chain = (
-            RunnableParallel(
-                {"context": self.retriever, "question": RunnablePassthrough()})
+            self.rag_chain_base
             | RunnablePassthrough.assign(
-                result=llm_generate)
-            | RunnablePassthrough.assign(
-                source_documents=(lambda x: self._parse_documents(x["context"])))
-            | RunnableLambda(lambda output: [output.pop('context'), output] [1]) # drop the key "context"
-        )        
-        
+                source_documents=(lambda x: self._parse_documents(x["context"]))
+            )
+            | RunnableLambda(
+                lambda output: [output.pop("context"), output][1]
+            )  # drop the key "context"
+        )
+
         # Note: figure how out runnable works and add a chain to parse source_documents here
-        
+
         # logic: rag_chain.invoke(xxx)
         # --> xxx gets passed into self.retriever and RunnablePassthrough()
-        # returns {"source_documents": retriever(xxx), "question": xxx}
+        # returns {"context": retriever(xxx), "question": xxx}
         # --> this is input into rag_chain_from_docs, and the output of that is appended
-        # the RunnablePassthrough creates a {"context"=format_docs(retriever(xxx)),
-        #   "source_documents":"retriver(xxx)", "question'":xxx}
-        # passthrough to prompt, a chat prompt template that needs "context" and "question" as variables
-        #   returns the entire prompt which is passed into llm, etc.
-        # to the dict under the key "result"
+        #   --> the RunnablePassthrough creates a {"context"=format_docs(retriever(xxx)),
+        #       "source_documents":"retriver(xxx)", "question'":xxx}
+        #   --> passthrough to prompt, a chat prompt template that needs "context" and "question" as variables
+        #       returns the entire prompt which is passed into llm, etc.
+        #   --> append result to the {"context": ..., "question": ...} dict under the key "result"
+        # --> parse the "context" item (which is a list of Document objects), store under "source_documents"
+        # --> remove "context" key
 
-        self.logger = logging.getLogger('genie')
+        self.logger = logging.getLogger("genie")
         self.logger.setLevel(logging.INFO)
-        handler = logging.FileHandler('./api_calls.log')
+        handler = logging.FileHandler("./api_calls.log")
         self.logger.addHandler(handler)
         self.logger.propagate = False
+
+    def __str__(self):
+        return f"<Genie name={self.politician_name} model={self.model_name}>"
 
     @staticmethod
     def validate_model_name(name):
@@ -137,7 +167,10 @@ Question: For {name}, {question}
                 "context",
                 "question",
             ],  # i'm guessing retriever outputs these
-            partial_variables={"format_instructions": output_format_instruction, "name": name},
+            partial_variables={
+                "format_instructions": output_format_instruction,
+                "name": name,
+            },
         )
         human_message_prompt = HumanMessagePromptTemplate(prompt=prompt)
 
@@ -186,31 +219,42 @@ Question: For {name}, {question}
             base_compressor=pipeline_compressor, base_retriever=base_retriever
         )
         return compression_retriever
-    
+
     @staticmethod
     def _parse_documents(source_docs: List[Document]):
         for i in range(len(source_docs)):
             source_docs[i] = {
                 "source_content": source_docs[i].page_content,
-                "source_category": source_docs[i].metadata.get(
-                    "parent_question", ""
-                ),
+                "source_category": source_docs[i].metadata.get("parent_question", ""),
                 "source_sub_category": source_docs[i].metadata.get("question", ""),
             }
             # source_docs[i] = source_docs[i].dict() # langchain has a method to parse document to dict
         return source_docs
 
+    def _get_rag_chain(self):
+        return self.rag_chain
+    
+    def _get_base_rag_chain(self):
+        return self.rag_chain_base
+
     def get_relevant_documents(self, question: str):
         return self.retriever.get_relevant_documents(question)
+    
+    def base_ask(self, question: str):
+        return self.rag_chain_base.invoke(question)
+    
+    def base_batch_ask(self, questions: List[str]):
+        return self.rag_chain_base.batch(questions)
+    
+    async def async_base_batch_ask(self, questions: List[str]):
+        return await self.rag_chain_base.abatch(questions)
 
     def ask(self, question: str):
         with get_openai_callback() as cb:
             result = self.rag_chain.invoke(question)
-            print(result)
 
-            # result["total_tokens"] = cb.total_tokens
-            # result["total_cost"] = cb.total_cost
-            # result["source_documents"] = self._parse_context(result["source_documents"])
+            result["total_tokens"] = cb.total_tokens
+            result["total_cost"] = cb.total_cost
 
             # logging
             # Note: move log into the chain later
@@ -224,14 +268,24 @@ Question: For {name}, {question}
                 json.dumps(result),
             )
         return result
-    
+
     def batch_ask(self, questions: List[str]):
-        return
+        with get_openai_callback() as cb:
+            predictions = self.rag_chain.batch(questions)
+
+            results = {
+                "results": predictions,
+                "total_tokens": cb.total_tokens,
+                "total_cost": cb.total_cost
+            }
+
+        return results
 
     async def async_ask(self, question: str):
         with get_openai_callback() as cb:
-            result = await self.genie.acall({"query": question})
-            result = self._parse_result(result, cb.total_tokens, cb.total_cost)
+            result = await self.rag_chain.ainvoke(question)
+            result["total_tokens"] = cb.total_tokens
+            result["total_cost"] = cb.total_cost
 
             # logging
             tz = timezone("US/Eastern")
@@ -245,6 +299,49 @@ Question: For {name}, {question}
             )
         return result
     
+    async def async_batch_ask(self, questions: List[str]):
+        with get_openai_callback() as cb:
+            predictions = await self.rag_chain.abatch(questions)
+
+            results = {
+                "results": predictions,
+                "total_tokens": cb.total_tokens,
+                "total_cost": cb.total_cost
+            }
+
+        return results
+    
+    def evaluate(self, questions: List[str], ground_truths: List[List[str]] | None = None):
+        print("Getting LLM response...")
+        results = self.base_batch_ask(questions)
+
+        answers = [json.dumps(entry['result']) for entry in results]
+        contexts = [[doc.page_content for doc in entry['context']] for entry in results]
+
+        data_samples = {
+            'question': questions,
+            'answer': answers,
+            'contexts': contexts,            
+        }
+        if ground_truths:
+            data_samples['ground_truths'] = ground_truths
+        
+        dataset = Dataset.from_dict(data_samples)
+
+        metrics = [
+            # context_precision,
+            faithfulness,
+            answer_relevancy,
+            context_relevancy
+        ]
+        if ground_truths:
+            metrics.append(context_recall) 
+
+        result = evaluate(dataset, metrics = metrics)
+
+        return result
+
+
     # parser classes
     class BaseResponse(BaseModel):
         answer: str = Field(
@@ -253,7 +350,8 @@ Question: For {name}, {question}
 
     class ReasponseWithReasoning(BaseResponse):
         reasoning: str = Field(description="The reasoning behind the response")
-    
-    class ResponseWithReasoningAndEvidence(ReasponseWithReasoning):
-        evidence: List[str] = Field(description="List the quotes from the context that supports your answer")
 
+    class ResponseWithReasoningAndEvidence(ReasponseWithReasoning):
+        evidence: List[str] = Field(
+            description="List the quotes from the context that supports your answer"
+        )
