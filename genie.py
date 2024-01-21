@@ -32,11 +32,13 @@ from langchain_core.runnables import (
 )
 
 from ragas.metrics import (
-    answer_relevancy,
     faithfulness,
-    context_recall,
+    answer_relevancy,
     context_precision,
-    context_relevancy
+    context_relevancy,
+    context_recall,
+    AnswerSimilarity,
+    AnswerCorrectness
 )
 from ragas import evaluate
 
@@ -78,7 +80,7 @@ class Genie:
             output_parser = StrOutputParser()
             format_instruction = ""
 
-        prompt = self.prompt_generator(politician_name, format_instruction)
+        self.prompt_template = self.prompt_generator(politician_name, format_instruction)
 
         # the magic starts here
         def format_docs(docs):
@@ -94,7 +96,7 @@ class Genie:
 
         llm_generate = (
             RunnablePassthrough.assign(context=(lambda x: format_docs(x["context"])))
-            | prompt
+            | self.prompt_template
             | RunnableLambda(print_prompt)
             | llm
             | output_parser
@@ -237,6 +239,10 @@ Question: For {name}, {question}
     def _get_base_rag_chain(self):
         return self.rag_chain_base
 
+
+    def get_prompt_template(self):
+        return self.prompt_template
+    
     def get_relevant_documents(self, question: str):
         return self.retriever.get_relevant_documents(question)
     
@@ -329,13 +335,15 @@ Question: For {name}, {question}
         dataset = Dataset.from_dict(data_samples)
 
         metrics = [
-            # context_precision,
             faithfulness,
             answer_relevancy,
-            context_relevancy
+            context_relevancy,
         ]
         if ground_truths:
-            metrics.append(context_recall) 
+            metrics.extend([
+                context_recall,
+                AnswerCorrectness(weights=[0.4,0.6])
+            ]) 
 
         result = evaluate(dataset, metrics = metrics)
 

@@ -16,6 +16,9 @@ genie = gm.get_genie(name)
 # print(genie.prompt.format(context="CONTEXT", question="QUESTION"))
 # exit()
 
+print(genie.base_ask(question))
+exit()
+
 response = genie.ask(question)
 print("\033[1mANSWER:\033[0m")
 print(response["result"].get("answer", ""))

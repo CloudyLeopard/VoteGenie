@@ -115,6 +115,34 @@ class GenieMaster:
             for name in names
         }
         return genies
+    
+    def evaluate(self, df: pd.DataFrame, genie_model: str = "gpt-3.5-turbo-1106"):
+        if not set(['name', 'question']).issubset(df.columns):
+            raise Exception("Make sure dataframe contains columns 'question', 'answer' and 'contexts'")
+        
+        # ground truths value should be list
+        has_ground_truths = 'ground_truths' in df.columns
+
+        df_eval = pd.DataFrame()
+
+        for name in df['name'].unique():
+            df_data = df.loc[df['name'] == name]
+            genie = self.get_genie(name, model_name=genie_model)
+            print("\033[1mEvaluating", genie, '\033[0m')
+
+            questions = df_data['question'].unique().tolist()
+            ground_truths = df_data['ground_truths'].to_list() if has_ground_truths else None
+
+            eval_result = genie.evaluate(questions, ground_truths)
+
+            # produce dataframe w score
+            df_eval_result = eval_result.to_pandas()
+            df_eval_result.insert(0, 'name', '')
+            df = df.assign(name=name)
+            df_eval = pd.concat([df_eval, df_eval_result], axis=0, ignore_index=True)
+
+        return df_eval
+        
 
 if __name__ == "__main__":
     import re
