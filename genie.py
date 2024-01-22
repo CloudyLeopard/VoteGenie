@@ -10,6 +10,7 @@ from langchain.prompts import (
     HumanMessagePromptTemplate,
 )
 from langchain_core.output_parsers import StrOutputParser, JsonOutputParser
+from langchain.output_parsers import PydanticOutputParser
 
 # from langchain.chains import RetrievalQA
 from langchain_openai.chat_models import ChatOpenAI
@@ -30,6 +31,8 @@ from langchain_core.runnables import (
     RunnableParallel,
     RunnableLambda,
 )
+
+from langchain.chains import LLMChain
 
 from ragas.metrics import (
     faithfulness,
@@ -69,11 +72,11 @@ class Genie:
         self.politician_name = politician_name
         self.model_name = self.validate_model_name(model_name)
         self.vectorstore = vectorstore
-        self.retriever = self._retriever(self.vectorstore, politician_name)
+        self.retriever = self._multiquery_retriever(self.vectorstore, politician_name)
 
         if use_parser:
             output_parser = JsonOutputParser(
-                pydantic_object=self.ResponseWithReasoningAndEvidence
+                pydantic_object=ResponseWithReasoningAndEvidence
             )
             format_instruction = output_parser.get_format_instructions()
         else:
@@ -153,16 +156,22 @@ class Genie:
     @staticmethod
     def prompt_generator(name, output_format_instruction: str = ""):
         # template = "You determine a person's response to a given question based on their statements"
-        template = "You determine how a person will respond to a given question based on that person's quotes"
+        template = '''You will be provided with different pieces of context delimited by triple quotes and a question. \
+The context are either statements made by the person of interest, or statements describing the person of interest. \
+Your task is to answer the question using only the provided context, then support the answer with evidence and reasoning. \
+If the document does not contain the information needed to answer this question, simply write “unknown”.
+'''
         system_message_prompt = SystemMessagePromptTemplate.from_template(template)
 
-        prompt_template = """Use the following pieces of context to answer the question at the end, and support it with evidence. If you don't know the answer, just say that you don't know, don't try to make up an answer.
-{format_instructions}
-
+        prompt_template = '''
+"""
 {context}
+"""
 
 Question: For {name}, {question}
-"""
+
+{format_instructions}
+'''
         prompt = PromptTemplate(
             template=prompt_template,
             input_variables=[
@@ -189,14 +198,13 @@ Question: For {name}, {question}
         )
 
     @staticmethod
-    def _multiquery_retriever(vectorstore: VectorStore, name: str):
-        import logging
+    def _multiquery_retriever(vectorstore: VectorStore, name: str, model_name="gpt-3.5-turbo-1106"):
 
-        logging.basicConfig()
-        logging.getLogger("langchain.retrievers.multi_query").setLevel(logging.INFO)
+        # logging.basicConfig()
+        # logging.getLogger("langchain.retrievers.multi_query").setLevel(logging.INFO)
 
         base_retriever = Genie._retriever(vectorstore, name)
-        llm = ChatOpenAI(temperature=0)
+        llm = ChatOpenAI(model=model_name, temperature=0)
         retriever_from_llm = MultiQueryRetriever.from_llm(
             retriever=base_retriever, llm=llm
         )
@@ -221,6 +229,41 @@ Question: For {name}, {question}
             base_compressor=pipeline_compressor, base_retriever=base_retriever
         )
         return compression_retriever
+    
+    @staticmethod
+    def _hyde_retriever(vectorstore: VectorStore, name: str, model_name="gpt-3.5-turbo-1106"):
+        # Output parser will split the LLM result into a list of queries
+
+        prompt = ChatPromptTemplate.from_messages(
+            [("human", """What are all the possible answers to the following question? \
+Separate the answer by new lines. The answers should be two sentences long. 
+
+Question: {question}
+
+Here's an example with the correct format for the answer
+Question: Should the government ban women's access to abortion?
+
+It is a woman's right to make decisions about her own body and health.
+The government should ban abortion as some view it as the taking of an innocent life and believe the state has a responsibility to protect that life.
+Access to safe abortions is a matter of public health and human rights.
+A ban on abortion could disproportionately affect those from lower socioeconomic backgrounds who may not have the means to access safe alternatives. Health care decisions should be private and accessible to all women.
+Life begins at conception, and the government has a duty to preserve it
+"""),
+("system", "You are an expert on politics")]
+)
+
+
+        llm = ChatOpenAI(temperature=0, model=model_name)
+
+        parser = LineListOutputParser()
+        llm_chain = LLMChain(llm=llm, prompt=prompt, output_parser=parser)
+
+        base_retriever = Genie._retriever(vectorstore, name)
+        hyde_retriever = MultiQueryRetriever(
+            retriever=base_retriever, llm_chain=llm_chain, parser="lines"
+        )
+        return hyde_retriever
+        
 
     @staticmethod
     def _parse_documents(source_docs: List[Document]):
@@ -350,16 +393,28 @@ Question: For {name}, {question}
         return result
 
 
-    # parser classes
-    class BaseResponse(BaseModel):
-        answer: str = Field(
-            description="The response to the question. Accepted values are: yes, no, unknown"
-        )
+# parser classes
+class BaseResponse(BaseModel):
+    answer: str = Field(
+        description="The response to the question. Accepted values are: yes, no, unknown"
+    )
 
-    class ReasponseWithReasoning(BaseResponse):
-        reasoning: str = Field(description="The reasoning behind the response")
+class ResponseWithReasoning(BaseResponse):
+    reasoning: str = Field(description="The reasoning behind the response")
 
-    class ResponseWithReasoningAndEvidence(ReasponseWithReasoning):
-        evidence: List[str] = Field(
-            description="List the quotes from the context that supports your answer"
-        )
+class ResponseWithReasoningAndEvidence(ResponseWithReasoning):
+    evidence: List[str] = Field(
+        description="List all segments of the context that supports the answer. Leave the list empty if answer is unknown"
+    )
+
+class LineList(BaseModel):
+    # "lines" is the key (attribute name) of the parsed output
+    lines: List[str] = Field(description="Lines of text")
+
+class LineListOutputParser(PydanticOutputParser):
+    def __init__(self) -> None:
+        super().__init__(pydantic_object=LineList)
+
+    def parse(self, text: str) -> LineList:
+        lines = text.strip().split("\n")
+        return LineList(lines=lines)

@@ -15,6 +15,9 @@ from pytz import timezone
 # type declaration
 from typing import List
 
+import time
+
+
 
 class GenieMaster:
     _EMBEDDING_FUNCTION = OpenAIEmbeddings()
@@ -116,9 +119,47 @@ class GenieMaster:
         }
         return genies
     
+    def process(self, names: List[str], questions: List[str], genie_model: str = "gpt-3.5-turbo-1106", backup_file_path = ""):
+        df_result = pd.DataFrame()
+
+        total_tokens = 0
+        total_cost = 0
+
+        start_time = time.time()
+        for name in names:
+            genie = self.get_genie(name, model_name=genie_model)
+            print("\033[1mSummoning", genie, '\033[0m')
+
+            eval_result = genie.batch_ask(questions)
+            
+            total_tokens += eval_result['total_tokens']
+            total_cost += eval_result['total_cost']
+            print("--- %s seconds ---" % round((time.time() - start_time), 5))
+            print("--- $%s ---" % round(total_cost, 5))
+            
+            # produce dataframe
+            df = pd.DataFrame(eval_result['results'])
+            df['answer'] = df['result'].apply(lambda x: x['answer'])
+            df['reasoning'] = df['result'].apply(lambda x: x['reasoning'])
+            df['evidence'] = df['result'].apply(lambda x: x['evidence'])
+
+            df['contexts'] = df['source_documents'].apply(
+                lambda docs: [doc.page_content for doc in docs]
+            )
+            df = df.drop(columns=["result, source_documents"])
+            
+            if backup_file_path:
+                df.to_excel(backup_file_path)
+            
+            df.insert(0, 'name', '')
+            df = df.assign(name=name)
+            df_result = pd.concat([df, df_result], axis=0, ignore_index=True)
+
+        return df_result
+    
     def evaluate(self, df: pd.DataFrame, genie_model: str = "gpt-3.5-turbo-1106"):
         if not set(['name', 'question']).issubset(df.columns):
-            raise Exception("Make sure dataframe contains columns 'question', 'answer' and 'contexts'")
+            raise Exception("Make sure dataframe contains columns 'question', 'answer'")
         
         # ground truths value should be list
         has_ground_truths = 'ground_truths' in df.columns
