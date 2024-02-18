@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+
+{% block content %}
+    <h2>Uploaded Excel Data First 5 Rows</h2>
+    {{ table|safe }}
+
+    <h3>Number of politicians in data:</h3>
+    {{ politician_nums }}
+
+    <h1>List of Questions</h1>
+    <ul>
+        {% for question in questions %}
+            <li>{{ question }}</li>
+        {% endfor %}
+    </ul>
+
+    <form method="GET" action="/prompts">
+        <button id="continue1" type="submit" class="btn btn-primary">Get estimates before processing</button>
+        <!-- add a button that allows user to choose to ONLY PROCESS QUESTIONS THAT WEREN'T ANSWERED BY A POLITICIAN -->
+    </form>
+{% endblock %}

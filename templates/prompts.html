@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+
+{% block content %}
+    <h2>Generated Prompt Random 5 Rows</h2>
+    {{ table|safe }}
+    <h2>
+        Number of requests: 
+        <span id="request_num">{{ prompt_nums }}</span>
+    </h2>
+    <h2>
+        Estimated cost:
+        <span id="estimated_cost">{{ estimated_cost }}</span>
+    </h2>
+
+    <form method="GET" action="/process">
+        <label for="filename">Enter file name to store data. ONLY THE NAME, so do not add "./xlsx" or "./"</label>
+        <input type="text" name="filename">
+        <button id="continue2" type="submit" class="btn btn-primary">Begin processing</button>
+    </form>
+    <p id="continue2_progress"></p>
+
+    <script>
+        document.querySelector("#id").addEventListener('click', () => {
+            document.querySelector("#continue2_progress").textContent = "in progress!"
+        });
+    </script>
+{% endblock %}

@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+
+{% block content %}
+    <h2>
+        Total cost:
+        <span>{{ total_cost }}</span>
+    </h2>
+
+    <h2>Generated Result</h2>
+    {{ table|safe }}
+{% endblock %}
